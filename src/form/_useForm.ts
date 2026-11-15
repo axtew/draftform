@@ -5,28 +5,34 @@ import {
   useId,
   useLayoutEffect,
   useMemo,
-  useReducer,
   useRef,
   useState,
 } from "react";
 
-import { validateField } from "../validate";
+import { save } from "../submit";
+import { deriveFields } from "./_derive";
+import { elementRef, type Elements, focusFirst } from "./_elements";
 import { displayValue, readInput } from "./_input";
-import { createState, formReducer, isSameValue, type Values } from "./_state";
+import { createState, createStore, isSameValue, startValues, type Values } from "./_state";
 import type {
   CheckboxFieldProps,
   CheckValues,
   FieldElement,
-  FieldState,
+  FieldRef,
   FieldValue,
   Form,
   FormOptions,
   InputFieldProps,
+  RadioFieldProps,
+  RadioOptions,
 } from "./_types";
 
 interface Handlers {
   onChange: (event: ChangeEvent<FieldElement>) => void;
   onBlur: () => void;
+  ref: FieldRef;
+  /** A change handler and a ref per radio option. */
+  radios: Map<FieldValue, { onChange: () => void; ref: FieldRef }>;
 }
 
 // Layout effects warn during server rendering in React 18; there is nothing to sync there.
@@ -34,23 +40,30 @@ const useIsomorphicLayoutEffect = typeof document === "undefined" ? useEffect : 
 
 /**
  * Form state for a flat form: values that keep their types, validation, `touched`,
- * and `dirty` measured against the saved values.
+ * `dirty` measured against the saved values, and submission that marks as saved
+ * exactly what was sent.
  *
  * ```tsx
  * const form = useForm({
- *   initial: { email: "", age: 18, remember: false },
+ *   initial: { email: "", age: 18, plan: "free", remember: false },
  *   fields: { email: { required: true, normalize: (v) => v.trim() } },
+ *   onSubmit: (values, { changed }) => api.patch("/me", changed),
+ *   onError: (error) => toast(String(error)),
+ *   resetKey: userId,
  * });
  *
- * <input {...form.field("email")} />
- * {form.fields.email.visibleError && <p id={form.errorId("email")}>{form.fields.email.visibleError}</p>}
- * <input type="number" {...form.field("age")} />
- * <input type="checkbox" {...form.field("remember")} />
- * <button disabled={!form.canSubmit}>Save</button>
+ * <form onSubmit={form.handleSubmit}>
+ *   <input {...form.field("email")} />
+ *   {form.fields.email.visibleError && <p id={form.errorId("email")}>{form.fields.email.visibleError}</p>}
+ *   <input type="number" {...form.field("age")} />
+ *   <input type="radio" {...form.field("plan", { radio: "pro" })} />
+ *   <input type="checkbox" {...form.field("remember")} />
+ *   <button disabled={!form.canSubmit}>Save</button>
+ * </form>
  * ```
  *
- * `initial` is read on mount; later changes of it are ignored. `fields` is read on
- * every render, so validators may depend on props.
+ * `initial` is read on mount and on reset; `fields` and the handlers are read on every
+ * render, so they may depend on props.
  */
 export function useForm<V>(options: FormOptions<V> & CheckValues<V>): Form<V> {
   // The form's type lives in the public signature; inside, values are plain records.
@@ -58,9 +71,17 @@ export function useForm<V>(options: FormOptions<V> & CheckValues<V>): Form<V> {
   // oxlint-disable-next-line typescript/no-unsafe-type-assertion
   const untyped = options as unknown as FormOptions<Values>;
 
-  const [state, dispatch] = useReducer(formReducer, untyped, (o) =>
-    createState(o.initial, o.saved),
-  );
+  const [state, setState] = useState(() => createState(untyped.initial, untyped.saved));
+  const [store] = useState(() => createStore(state, setState));
+  const { dispatch } = store;
+
+  // A new key resets during render, as React recommends for adjusting state to a prop:
+  // the children never render the old record's values with the new key.
+  const [resetKey, setResetKey] = useState(untyped.resetKey);
+  if (!Object.is(resetKey, untyped.resetKey)) {
+    setResetKey(untyped.resetKey);
+    dispatch({ type: "reset", ...startValues(untyped.initial, untyped.saved) });
+  }
 
   // Handlers made once read the options of the latest render: parsers may close over props.
   const optionsRef = useRef(untyped);
@@ -70,7 +91,9 @@ export function useForm<V>(options: FormOptions<V> & CheckValues<V>): Form<V> {
 
   const baseId = useId();
   const fieldId = useCallback(
-    (name: string) => `${baseId}-f-${encodeURIComponent(name)}`,
+    (name: string, option?: FieldValue) =>
+      `${baseId}-f-${encodeURIComponent(name)}` +
+      (option === undefined ? "" : `-${encodeURIComponent(String(option))}`),
     [baseId],
   );
   const errorId = useCallback(
@@ -92,16 +115,60 @@ export function useForm<V>(options: FormOptions<V> & CheckValues<V>): Form<V> {
         text: undefined,
       });
     },
-    [],
+    [dispatch],
   );
 
-  const setError = useCallback((name: string, error: string | null) => {
-    assertField(optionsRef.current.initial, name);
-    dispatch({ type: "error", name, error });
-  }, []);
+  const setError = useCallback(
+    (name: string, error: string | null) => {
+      assertField(optionsRef.current.initial, name);
+      dispatch({ type: "error", name, error });
+    },
+    [dispatch],
+  );
 
-  // One pair of handlers per field for the hook's lifetime: spreading `field()` on
-  // every render does not hand inputs new functions.
+  const [elements] = useState<Elements>(() => new Map());
+
+  const submit = useCallback(async (): Promise<boolean> => {
+    if (store.current.pending) return false;
+
+    dispatch({ type: "touchAll" });
+
+    const { values, saved, touched, errors } = store.current;
+    const derived = deriveFields(values, saved, touched, errors, optionsRef.current.fields);
+
+    if (!derived.valid) {
+      focusFirst(
+        Object.keys(values),
+        (name) => (derived.fields[name]?.error ?? null) !== null,
+        elements,
+      );
+      return false;
+    }
+
+    // An edit form does not resend unchanged data; the `saved` option covers create forms.
+    if (!derived.dirty) return false;
+
+    return save(store, () => optionsRef.current, values);
+  }, [store, dispatch, elements]);
+
+  const handleSubmit = useCallback(
+    (event?: { preventDefault: () => void }) => {
+      event?.preventDefault();
+      void submit();
+    },
+    [submit],
+  );
+
+  const reset = useCallback(
+    (values?: Partial<Values>) => {
+      const { initial, saved } = optionsRef.current;
+      dispatch({ type: "reset", ...startValues(initial, saved, values) });
+    },
+    [dispatch],
+  );
+
+  // One set of handlers per field (and per radio option) for the hook's lifetime:
+  // spreading `field()` on every render does not hand inputs new functions.
   const [handlersCache] = useState(() => new Map<string, Handlers>());
   const handlersFor = (name: string): Handlers => {
     let handlers = handlersCache.get(name);
@@ -130,6 +197,8 @@ export function useForm<V>(options: FormOptions<V> & CheckValues<V>): Form<V> {
           });
         },
         onBlur: () => dispatch({ type: "blur", name }),
+        ref: elementRef(elements, name),
+        radios: new Map(),
       };
       handlersCache.set(name, handlers);
     }
@@ -137,58 +206,67 @@ export function useForm<V>(options: FormOptions<V> & CheckValues<V>): Form<V> {
     return handlers;
   };
 
-  const fieldsOptions = untyped.fields;
-  const derived = useMemo(() => {
-    const fields: Record<string, FieldState<FieldValue>> = {};
-    let dirty = false;
-    let valid = true;
+  const radioFor = (name: string, handlers: Handlers, option: FieldValue) => {
+    let radio = handlers.radios.get(option);
 
-    // All validators run on every change: a cross-field rule ("repeat password")
-    // never shows a stale result, and flat forms are small enough for it.
-    for (const [name, value] of Object.entries(state.values)) {
-      const setByCaller = state.errors[name];
-      const error = setByCaller ?? validateField(value, state.values, fieldsOptions?.[name]);
-      const touched = state.touched[name] === true;
-      const saved = state.saved[name] ?? null;
-      const fieldDirty = !isSameValue(value, saved);
-
-      fields[name] = {
-        value,
-        saved,
-        error,
-        // An error set with setError comes from an explicit action: shown at once.
-        visibleError: setByCaller ?? (touched ? error : null),
-        dirty: fieldDirty,
-        touched,
+    if (radio === undefined) {
+      radio = {
+        // The option is the value: no parsing of the input's text.
+        onChange: () => setValue(name, option),
+        ref: elementRef(elements, name),
       };
-      dirty ||= fieldDirty;
-      valid &&= error === null;
+      handlers.radios.set(option, radio);
     }
 
-    return { fields, dirty, valid };
-  }, [state, fieldsOptions]);
+    return radio;
+  };
 
-  const field = (name: string): InputFieldProps | CheckboxFieldProps => {
+  const fieldsOptions = untyped.fields;
+  const { values, saved, touched, errors } = state;
+  const derived = useMemo(
+    () => deriveFields(values, saved, touched, errors, fieldsOptions),
+    [values, saved, touched, errors, fieldsOptions],
+  );
+
+  const field = (
+    name: string,
+    config?: RadioOptions<FieldValue>,
+  ): InputFieldProps | CheckboxFieldProps | RadioFieldProps => {
     const fieldState = derived.fields[name];
 
     if (fieldState === undefined) throw unknownField(name);
 
-    const { onChange, onBlur } = handlersFor(name);
+    const handlers = handlersFor(name);
     const { value, visibleError } = fieldState;
     const visible = visibleError !== null;
+    const format = fieldsOptions?.[name]?.format;
     const base = {
       name,
       id: fieldId(name),
-      onChange,
-      onBlur,
+      onChange: handlers.onChange,
+      onBlur: handlers.onBlur,
+      ref: handlers.ref,
       "aria-invalid": visible,
       "aria-describedby": visible ? errorId(name) : undefined,
     };
 
+    if (config !== undefined) {
+      const { radio: option } = config;
+      const radio = radioFor(name, handlers, option);
+
+      return {
+        ...base,
+        id: fieldId(name, option),
+        onChange: radio.onChange,
+        ref: radio.ref,
+        value: format === undefined ? String(displayValue(option)) : format(option),
+        checked: isSameValue(value, option),
+      };
+    }
+
     if (typeof value === "boolean") return { ...base, checked: value };
 
     const text = state.text[name];
-    const format = fieldsOptions?.[name]?.format;
 
     return {
       ...base,
@@ -198,16 +276,21 @@ export function useForm<V>(options: FormOptions<V> & CheckValues<V>): Form<V> {
 
   // `field` is typed per field in Form<V>; here it returns either shape.
   const form: Omit<Form<Values>, "field"> & { field: typeof field } = {
-    values: state.values,
+    values,
     fields: derived.fields,
     dirty: derived.dirty,
     valid: derived.valid,
-    canSubmit: derived.valid && derived.dirty,
+    canSubmit: derived.valid && derived.dirty && !state.pending,
+    pending: state.pending,
+    submitError: state.submitError,
     field,
     setValue,
     setError,
     fieldId,
     errorId,
+    submit,
+    handleSubmit,
+    reset,
   };
 
   // The values are the ones `initial` was typed with, and `field` returns checkbox

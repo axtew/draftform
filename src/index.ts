@@ -6,6 +6,7 @@ export {
   type FieldName,
   type FieldOptions,
   type FieldProps,
+  type FieldRef,
   type FieldsOptions,
   type FieldState,
   type FieldValue,
@@ -13,5 +14,8 @@ export {
   type FormOptions,
   type FormValues,
   type InputFieldProps,
+  type RadioFieldProps,
+  type RadioOptions,
+  type SubmitContext,
   useForm,
 } from "./form";

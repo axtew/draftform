@@ -9,6 +9,8 @@ import type {
   Form,
   FormOptions,
   InputFieldProps,
+  RadioFieldProps,
+  SubmitContext,
 } from "../index";
 import * as entry from "../index";
 
@@ -27,5 +29,7 @@ describe("entry point", () => {
     expectTypeOf<Form<{ a: string }>["fields"]["a"]>().toEqualTypeOf<FieldState<string>>();
     expectTypeOf<FieldProps<boolean>>().toEqualTypeOf<CheckboxFieldProps>();
     expectTypeOf<FieldProps<string | null>>().toEqualTypeOf<InputFieldProps>();
+    expectTypeOf<RadioFieldProps["value"]>().toEqualTypeOf<string>();
+    expectTypeOf<SubmitContext<{ a: string }>["changed"]>().toEqualTypeOf<{ a?: string }>();
   });
 });

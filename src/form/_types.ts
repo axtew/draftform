@@ -22,6 +22,9 @@ export type FieldName<V> = keyof V & string;
 /** The elements `field()` can be spread on. */
 export type FieldElement = HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement;
 
+/** The `ref` callback `field()` returns: the form keeps the element to focus it. */
+export type FieldRef = (element: FieldElement | null) => void;
+
 /** Per-field configuration, all optional. `T` is the field's value type, `V` the whole form. */
 export interface FieldOptions<T, V> {
   /**
@@ -57,7 +60,10 @@ export interface FieldOptions<T, V> {
 export type FieldsOptions<V> = { [K in keyof V]?: FieldOptions<V[K], V> };
 
 export interface FormOptions<V> {
-  /** Starting values. The form's type is inferred from them. */
+  /**
+   * Starting values. The form's type is inferred from them. Read on mount and on
+   * every reset, so a form keyed by `resetKey` can pass the record being edited.
+   */
   initial: V;
   /** Parsing, formatting and validation per field. */
   fields?: FieldsOptions<V>;
@@ -68,6 +74,27 @@ export interface FormOptions<V> {
    * first render and the form can be submitted without edits.
    */
   saved?: Partial<V>;
+  /**
+   * Saves the values; called by `submit()` for a valid, dirty form. Throw (or reject)
+   * to report a failure: the form stays dirty for a retry and `onError` gets the error.
+   * When it resolves, exactly the values it got become saved; edits made meanwhile stay
+   * dirty. The handler of the latest render is called.
+   */
+  onSubmit?: (values: V, context: SubmitContext<V>) => unknown;
+  /** Called with what `onSubmit` threw. The error is also in `submitError`. */
+  onError?: (error: unknown) => void;
+  /**
+   * When it changes (compared with `Object.is`), the form resets to `initial` and the
+   * `saved` option of that render, before its children render: pass the id of the
+   * record being edited.
+   */
+  resetKey?: unknown;
+}
+
+/** The second argument of `onSubmit`. */
+export interface SubmitContext<V> {
+  /** Only the fields that differ from their saved values: the body of a PATCH. */
+  changed: Partial<V>;
 }
 
 /** The state of one field. */
@@ -96,6 +123,13 @@ export interface BaseFieldProps {
   "aria-invalid": boolean;
   /** Points to the element with `errorId(name)` while the error is visible. */
   "aria-describedby": string | undefined;
+  /**
+   * Lets the form focus the field after a failed submit. To keep a ref of your own,
+   * call both: `ref={(el) => { props.ref(el); myRef.current = el; }}`. A field without
+   * an element is skipped; on React 18 leave `ref` out when spreading on a component
+   * that does not forward refs.
+   */
+  ref: FieldRef;
 }
 
 /** Props for text inputs, number inputs, `<select>` and `<textarea>`. */
@@ -106,6 +140,22 @@ export interface InputFieldProps extends BaseFieldProps {
 /** Props for a checkbox: `checked` instead of `value`. */
 export interface CheckboxFieldProps extends BaseFieldProps {
   checked: boolean;
+}
+
+/**
+ * Props for one radio button of a group, from `field(name, { radio: option })`. Write
+ * `type="radio"` yourself. The `id` is unique per option: `fieldId(name, option)`.
+ */
+export interface RadioFieldProps extends BaseFieldProps {
+  /** The option as text, through the field's `format`. */
+  value: string;
+  /** The field's value is this option. */
+  checked: boolean;
+}
+
+/** The second argument of `field()` for a radio button: the option it stands for. */
+export interface RadioOptions<T> {
+  radio: T;
 }
 
 /** Props `field(name)` returns: a checkbox for a boolean field, an input otherwise. */
@@ -120,10 +170,20 @@ export interface Form<V> {
   dirty: boolean;
   /** No field has an error. */
   valid: boolean;
-  /** Valid and dirty: there is something to save. */
+  /** Valid, dirty and not pending: there is something to save. */
   canSubmit: boolean;
-  /** Props to spread on an input, `<select>` or `<textarea>`. */
-  field: <K extends FieldName<V>>(name: K) => FieldProps<V[K]>;
+  /** A submit is in flight. */
+  pending: boolean;
+  /** What the last failed `onSubmit` threw; `null` after a success or a reset. */
+  submitError: unknown;
+  /**
+   * Props to spread on an input, `<select>` or `<textarea>`. With `{ radio: option }`,
+   * props for the radio button of that option; the option must fit the field's type.
+   */
+  field: {
+    <K extends FieldName<V>>(name: K): FieldProps<V[K]>;
+    <K extends FieldName<V>>(name: K, options: RadioOptions<V[K]>): RadioFieldProps;
+  };
   /**
    * Sets a value from code (custom components, computed fields). Takes a value or a
    * function of the current one; several calls in one handler all apply in order.
@@ -134,8 +194,28 @@ export interface Form<V> {
    * stays until the field is edited; `null` removes it.
    */
   setError: (name: FieldName<V>, error: string | null) => void;
-  /** The `id` the field's input gets, for `<label htmlFor>`. */
-  fieldId: (name: FieldName<V>) => string;
+  /**
+   * The `id` the field's input gets, for `<label htmlFor>`. With an option, the `id` of
+   * that radio button.
+   */
+  fieldId: <K extends FieldName<V>>(name: K, option?: V[K]) => string;
   /** The `id` to put on the element showing the field's error. */
   errorId: (name: FieldName<V>) => string;
+  /**
+   * Submits: marks all fields touched, so errors show; for an invalid form focuses the
+   * first field with an error (in the order of `initial`) and stops; for a form without
+   * changes stops; otherwise calls `onSubmit`. While a submit is pending, another one
+   * does nothing and resolves `false`. Resolves `true` when the values were saved.
+   */
+  submit: () => Promise<boolean>;
+  /** `submit()` for `<form onSubmit>`: prevents the page reload. */
+  handleSubmit: (event?: { preventDefault: () => void }) => void;
+  /**
+   * Starts over: clears touched fields, errors from `setError` and `submitError`.
+   * Without arguments, values return to `initial` and the `saved` option. Given values
+   * (data loaded after mount) become both current and saved; missing fields return to
+   * `initial`. A submit in flight stays pending, but its result no longer marks
+   * anything saved.
+   */
+  reset: (values?: Partial<V>) => void;
 }
