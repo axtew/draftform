@@ -28,6 +28,8 @@ export interface FormState {
    * reset, its values belong to the old data and must not be marked saved.
    */
   epoch: number;
+  /** The `resetKey` these values belong to. */
+  key: unknown;
 }
 
 export type FormAction =
@@ -45,7 +47,7 @@ export type FormAction =
   /** The save of `sent` succeeded: exactly these values become saved. */
   | { type: "submitDone"; epoch: number; sent: Values }
   | { type: "submitFailed"; epoch: number; error: unknown }
-  | { type: "reset"; values: Values; saved: Values };
+  | { type: "reset"; values: Values; saved: Values; key: unknown };
 
 /** Equal values; `NaN` equals `NaN`, so an empty number field that stays empty is clean. */
 export function isSameValue(a: FieldValue, b: FieldValue | undefined): boolean {
@@ -79,7 +81,11 @@ export function startValues(
   return { values: current, saved };
 }
 
-export function createState(initial: Values, savedOption: Partial<Values> | undefined): FormState {
+export function createState(
+  initial: Values,
+  savedOption: Partial<Values> | undefined,
+  key: unknown,
+): FormState {
   return {
     ...startValues(initial, savedOption),
     text: {},
@@ -88,6 +94,7 @@ export function createState(initial: Values, savedOption: Partial<Values> | unde
     pending: false,
     submitError: null,
     epoch: 0,
+    key,
   };
 }
 
@@ -167,13 +174,15 @@ export function formReducer(state: FormState, action: FormAction): FormState {
     pending: state.pending,
     submitError: null,
     epoch: state.epoch + 1,
+    key: action.key,
   };
 }
 
 /**
  * The form's state outside React's queue, so code running after an update in the same
  * handler (`setValue` then `submit`) reads the new values. Every change also goes to
- * React state, which renders it.
+ * React state, which renders it. Only handlers and effects dispatch here, never a
+ * render: React may throw a render away, and the store would keep its changes.
  */
 export interface Store {
   readonly current: FormState;

@@ -1,4 +1,5 @@
 export type {
+  AutosaveOptions,
   BaseFieldProps,
   CheckboxFieldProps,
   CheckValues,

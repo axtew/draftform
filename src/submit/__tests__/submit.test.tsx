@@ -349,7 +349,7 @@ describe("submit checks the form first", () => {
 });
 
 describe("one submit at a time", () => {
-  it("a second submit while pending does not send again and resolves false", async () => {
+  it("a second submit while pending waits for the first and sends nothing new", async () => {
     const request = deferred();
     const onSubmit = vi.fn<() => Promise<void>>(() => request.promise);
     const { result } = renderHook(() => useForm({ initial: { name: "Ann" }, onSubmit }));
@@ -364,12 +364,48 @@ describe("one submit at a time", () => {
     });
 
     expect(onSubmit).toHaveBeenCalledOnce();
-    expect(await second).toBe(false);
 
     await act(async () => {
       request.resolve();
       expect(await first).toBe(true);
+      expect(await second).toBe(true);
     });
+
+    expect(onSubmit).toHaveBeenCalledOnce();
+    expect(result.current.dirty).toBe(false);
+  });
+
+  it("a second submit while pending sends edits made after the first one, after it ends", async () => {
+    const first = deferred();
+    const onSubmit = vi
+      .fn<(values: { name: string }) => Promise<void>>()
+      .mockReturnValueOnce(first.promise)
+      .mockResolvedValueOnce(undefined);
+    const { result } = renderHook(() => useForm({ initial: { name: "Ann" }, onSubmit }));
+
+    act(() => result.current.setValue("name", "Bob"));
+    let submitted: Promise<boolean> | undefined;
+    act(() => {
+      submitted = result.current.submit();
+    });
+    act(() => result.current.setValue("name", "Bobby"));
+
+    let again: Promise<boolean> | undefined;
+    act(() => {
+      again = result.current.submit();
+    });
+    // Not in parallel: the second request waits for the first.
+    expect(onSubmit).toHaveBeenCalledOnce();
+
+    await act(async () => {
+      first.resolve();
+      expect(await submitted).toBe(true);
+      expect(await again).toBe(true);
+    });
+
+    expect(onSubmit).toHaveBeenCalledTimes(2);
+    expect(onSubmit.mock.calls[1]?.[0]).toEqual({ name: "Bobby" });
+    expect(result.current.fields.name).toMatchObject({ saved: "Bobby", dirty: false });
   });
 
   it("canSubmit is false while pending and comes back for edits made meanwhile", async () => {

@@ -10,11 +10,32 @@ export type FieldValue = string | number | boolean | null;
 export type FormValues<V> = { [K in keyof V]: FieldValue };
 
 /**
- * Rejects values that are not field values (arrays, objects) at the call site.
+ * Rejects values that are not field values (arrays, objects) at the call site, and
+ * boolean fields that may also be `null` or missing: a checkbox has two states. For a
+ * third one ("not answered") use a radio group over a type such as
+ * `"yes" | "no" | null`. The error points at those fields and asks for `boolean`.
+ *
  * A check next to the options, not a constraint on the type parameter: a constraint
  * would make TypeScript keep `false` as a literal type instead of `boolean`.
  */
-export type CheckValues<V> = [V] extends [FormValues<V>] ? unknown : { initial: FormValues<V> };
+export type CheckValues<V> = [V] extends [FormValues<V>]
+  ? [TriStateFields<V>] extends [never]
+    ? unknown
+    : { initial: { [K in TriStateFields<V>]: boolean } }
+  : { initial: FormValues<V> };
+
+/** Names of boolean fields that may also be `null`, `undefined` or missing. */
+type TriStateFields<V> = {
+  [K in keyof V]-?: [Extract<V[K], boolean>] extends [never]
+    ? never
+    : null extends V[K]
+      ? K
+      : undefined extends V[K]
+        ? K
+        : {} extends Pick<V, K>
+          ? K
+          : never;
+}[keyof V];
 
 /** Field names of a form. */
 export type FieldName<V> = keyof V & string;
@@ -75,20 +96,42 @@ export interface FormOptions<V> {
    */
   saved?: Partial<V>;
   /**
-   * Saves the values; called by `submit()` for a valid, dirty form. Throw (or reject)
-   * to report a failure: the form stays dirty for a retry and `onError` gets the error.
-   * When it resolves, exactly the values it got become saved; edits made meanwhile stay
-   * dirty. The handler of the latest render is called.
+   * Saves the values; called by `submit()`, `flush()` and autosave for a valid, dirty
+   * form, one call at a time. Throw (or reject) to report a failure: the form stays
+   * dirty for a retry and `onError` gets the error. When it resolves, exactly the values
+   * it got become saved; edits made meanwhile stay dirty. The handler of the latest
+   * render is called.
    */
   onSubmit?: (values: V, context: SubmitContext<V>) => unknown;
   /** Called with what `onSubmit` threw. The error is also in `submitError`. */
   onError?: (error: unknown) => void;
   /**
+   * Saves by itself after the user stops editing: `true` waits 500 ms after the last
+   * change, `{ delay }` sets the wait in milliseconds. Only a valid, dirty form is
+   * saved; an invalid one waits for the next change, without touching fields or
+   * moving focus.
+   *
+   * One save runs at a time. Changes made while a save is in flight go in one more
+   * save right after it ends, with the latest values; a request in flight is never
+   * aborted, so the server gets the values in the order they were made. A failure does
+   * not retry by itself: the next change or `flush()` does. A change still waiting
+   * when the form unmounts is saved at once.
+   */
+  autosave?: boolean | AutosaveOptions | undefined;
+  /**
    * When it changes (compared with `Object.is`), the form resets to `initial` and the
    * `saved` option of that render, before its children render: pass the id of the
-   * record being edited.
+   * record being edited. Changes autosave has not sent yet are sent at once, with the
+   * handlers of the last render before the change, so they reach the record they were
+   * made on.
    */
   resetKey?: unknown;
+}
+
+/** Autosave settings. */
+export interface AutosaveOptions {
+  /** Milliseconds without changes before the form saves. Default: 500. */
+  delay?: number | undefined;
 }
 
 /** The second argument of `onSubmit`. */
@@ -172,7 +215,7 @@ export interface Form<V> {
   valid: boolean;
   /** Valid, dirty and not pending: there is something to save. */
   canSubmit: boolean;
-  /** A submit is in flight. */
+  /** A save is in flight: from `submit()`, `flush()` or autosave. */
   pending: boolean;
   /** What the last failed `onSubmit` threw; `null` after a success or a reset. */
   submitError: unknown;
@@ -204,18 +247,28 @@ export interface Form<V> {
   /**
    * Submits: marks all fields touched, so errors show; for an invalid form focuses the
    * first field with an error (in the order of `initial`) and stops; for a form without
-   * changes stops; otherwise calls `onSubmit`. While a submit is pending, another one
-   * does nothing and resolves `false`. Resolves `true` when the values were saved.
+   * changes stops; otherwise calls `onSubmit`. While a save is in flight, waits for it
+   * and then sends only what is still unsaved: a double click makes one request.
+   * Resolves `true` when the values are saved.
    */
   submit: () => Promise<boolean>;
+  /**
+   * Saves now, without the autosave wait: before leaving the page, or as "save now" in a
+   * form without autosave. Waits for a save in flight, then sends what is still
+   * unsaved. Does not touch fields or move focus. Resolves `true` when everything is
+   * saved, `false` when the form is invalid, the save failed or the form was reset
+   * meanwhile.
+   */
+  flush: () => Promise<boolean>;
   /** `submit()` for `<form onSubmit>`: prevents the page reload. */
   handleSubmit: (event?: { preventDefault: () => void }) => void;
   /**
    * Starts over: clears touched fields, errors from `setError` and `submitError`.
    * Without arguments, values return to `initial` and the `saved` option. Given values
    * (data loaded after mount) become both current and saved; missing fields return to
-   * `initial`. A submit in flight stays pending, but its result no longer marks
-   * anything saved.
+   * `initial`. A save in flight stays pending, but its result no longer marks
+   * anything saved. Changes autosave has not sent yet are dropped: to keep them,
+   * `await flush()` first.
    */
   reset: (values?: Partial<V>) => void;
 }

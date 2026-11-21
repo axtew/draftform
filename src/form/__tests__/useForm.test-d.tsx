@@ -2,6 +2,7 @@ import { describe, expectTypeOf, test } from "vitest";
 
 import {
   type CheckboxFieldProps,
+  type CheckValues,
   type FieldRef,
   type FieldState,
   type Form,
@@ -18,7 +19,18 @@ interface Profile {
   newsletter: boolean;
 }
 
+interface Survey {
+  agree: boolean | null;
+  name: string;
+}
+
+interface Settings {
+  dark?: boolean;
+}
+
 declare const profile: Profile;
+declare const survey: Survey;
+declare const settings: Settings;
 declare const mutateAsync: (body: Partial<{ title: string }>) => Promise<{ id: number }>;
 
 describe("the form type is inferred from initial", () => {
@@ -43,6 +55,36 @@ describe("the form type is inferred from initial", () => {
     useForm({ initial: { tags: ["a"] } });
     // @ts-expect-error: nor are nested objects
     useForm({ initial: { address: { city: "" } } });
+  });
+});
+
+describe("a boolean field is a checkbox: two states only", () => {
+  test("boolean | null, boolean | undefined and an optional boolean are rejected", () => {
+    // @ts-expect-error: a checkbox cannot show null
+    useForm({ initial: { agree: null as boolean | null } });
+    // @ts-expect-error: the same in an interface
+    useForm({ initial: survey });
+    // @ts-expect-error: nor undefined
+    useForm({ initial: { agree: undefined as boolean | undefined } });
+    // @ts-expect-error: nor a missing value
+    useForm({ initial: settings });
+    // @ts-expect-error: a literal boolean type too
+    useForm({ initial: { agree: null as true | null } });
+  });
+
+  test("the error asks for boolean at the field", () => {
+    // The intersection the check adds to the options: `initial` must have `agree: boolean`.
+    expectTypeOf<CheckValues<Survey>>().toEqualTypeOf<{ initial: { agree: boolean } }>();
+    expectTypeOf<CheckValues<{ agree: boolean }>>().toEqualTypeOf<unknown>();
+  });
+
+  test("boolean, and nullable strings and numbers, are fine", () => {
+    useForm({ initial: { agree: false } });
+    useForm({ initial: { agree: true, note: null as string | null } });
+    // Nullable numbers and strings of an interface: see Profile above.
+    // A third state goes through a radio group of another type.
+    const form = useForm({ initial: { answer: null as "yes" | "no" | null } });
+    form.field("answer", { radio: "yes" });
   });
 });
 
@@ -204,6 +246,7 @@ describe("submission", () => {
     const form = useForm({ initial: { title: "", pages: 0 } });
 
     expectTypeOf(form.submit).toEqualTypeOf<() => Promise<boolean>>();
+    expectTypeOf(form.flush).toEqualTypeOf<() => Promise<boolean>>();
     expectTypeOf(form.pending).toEqualTypeOf<boolean>();
     expectTypeOf(form.submitError).toEqualTypeOf<unknown>();
     form.reset();
@@ -214,6 +257,20 @@ describe("submission", () => {
     form.reset({ nope: 1 });
 
     void (<form onSubmit={form.handleSubmit} />);
+  });
+});
+
+describe("autosave", () => {
+  test("true, a delay, or off", () => {
+    useForm({ initial: { title: "" }, autosave: true });
+    useForm({ initial: { title: "" }, autosave: false });
+    useForm({ initial: { title: "" }, autosave: {} });
+    useForm({ initial: { title: "" }, autosave: { delay: 1000 } });
+    useForm({ initial: { title: "" }, autosave: undefined });
+    // @ts-expect-error: the delay is a number of milliseconds
+    useForm({ initial: { title: "" }, autosave: { delay: "1s" } });
+    // @ts-expect-error: a number alone is not the option
+    useForm({ initial: { title: "" }, autosave: 500 });
   });
 });
 

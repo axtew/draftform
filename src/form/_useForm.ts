@@ -9,11 +9,19 @@ import {
   useState,
 } from "react";
 
-import { save } from "../submit";
+import { createSaveQueue } from "../submit";
 import { deriveFields } from "./_derive";
 import { elementRef, type Elements, focusFirst } from "./_elements";
 import { displayValue, readInput } from "./_input";
-import { createState, createStore, isSameValue, startValues, type Values } from "./_state";
+import {
+  createState,
+  createStore,
+  type FormAction,
+  formReducer,
+  isSameValue,
+  startValues,
+  type Values,
+} from "./_state";
 import type {
   CheckboxFieldProps,
   CheckValues,
@@ -49,6 +57,7 @@ const useIsomorphicLayoutEffect = typeof document === "undefined" ? useEffect : 
  *   fields: { email: { required: true, normalize: (v) => v.trim() } },
  *   onSubmit: (values, { changed }) => api.patch("/me", changed),
  *   onError: (error) => toast(String(error)),
+ *   autosave: true,
  *   resetKey: userId,
  * });
  *
@@ -71,23 +80,44 @@ export function useForm<V>(options: FormOptions<V> & CheckValues<V>): Form<V> {
   // oxlint-disable-next-line typescript/no-unsafe-type-assertion
   const untyped = options as unknown as FormOptions<Values>;
 
-  const [state, setState] = useState(() => createState(untyped.initial, untyped.saved));
+  const [state, setState] = useState(() =>
+    createState(untyped.initial, untyped.saved, untyped.resetKey),
+  );
   const [store] = useState(() => createStore(state, setState));
   const { dispatch } = store;
 
-  // A new key resets during render, as React recommends for adjusting state to a prop:
-  // the children never render the old record's values with the new key.
-  const [resetKey, setResetKey] = useState(untyped.resetKey);
-  if (!Object.is(resetKey, untyped.resetKey)) {
-    setResetKey(untyped.resetKey);
-    dispatch({ type: "reset", ...startValues(untyped.initial, untyped.saved) });
-  }
-
-  // Handlers made once read the options of the latest render: parsers may close over props.
+  // Handlers made once read the options of the latest committed render: parsers and
+  // `onSubmit` may close over props.
   const optionsRef = useRef(untyped);
+  // The queue calls the getter from handlers, timers and effects, never during render.
+  // oxlint-disable-next-line react/refs
+  const [queue] = useState(() => createSaveQueue(store, () => optionsRef.current));
+
+  // A new key resets the form. This render already shows the reset state, so children
+  // never render the old record's values with the new key. The store resets only when
+  // the render commits: React may throw a render away (a transition that suspends or
+  // is interrupted, the extra render of StrictMode), and the store would stay reset
+  // while the screen shows the old record.
+  const current = Object.is(state.key, untyped.resetKey)
+    ? state
+    : formReducer(state, resetTo(untyped));
+
   useIsomorphicLayoutEffect(() => {
+    const previous = optionsRef.current;
     optionsRef.current = untyped;
+
+    if (!Object.is(store.current.key, untyped.resetKey)) {
+      // Changes autosave has not sent yet belong to the old record: they go out with
+      // its handlers, never with the new record's `onSubmit`.
+      queue.leave(previous);
+      dispatch(resetTo(untyped));
+    }
   });
+
+  useEffect(() => {
+    queue.mount();
+    return queue.unmount;
+  }, [queue]);
 
   const baseId = useId();
   const fieldId = useCallback(
@@ -101,21 +131,32 @@ export function useForm<V>(options: FormOptions<V> & CheckValues<V>): Form<V> {
     [baseId],
   );
 
+  /** A change of a value: autosave waits for quiet again. */
+  const change = useCallback(
+    (action: FormAction) => {
+      const before = store.current.values;
+      dispatch(action);
+
+      if (store.current.values !== before) queue.changed();
+    },
+    [store, dispatch, queue],
+  );
+
   const setValue = useCallback(
-    (name: string, next: FieldValue | ((current: FieldValue) => FieldValue)) => {
+    (name: string, next: FieldValue | ((value: FieldValue) => FieldValue)) => {
       const { initial, fields } = optionsRef.current;
       assertField(initial, name);
 
       const normalize = fields?.[name]?.normalize;
 
-      dispatch({
+      change({
         type: "change",
         name,
-        update: (current) => apply(normalize, typeof next === "function" ? next(current) : next),
+        update: (value) => apply(normalize, typeof next === "function" ? next(value) : next),
         text: undefined,
       });
     },
-    [dispatch],
+    [change],
   );
 
   const setError = useCallback(
@@ -129,8 +170,6 @@ export function useForm<V>(options: FormOptions<V> & CheckValues<V>): Form<V> {
   const [elements] = useState<Elements>(() => new Map());
 
   const submit = useCallback(async (): Promise<boolean> => {
-    if (store.current.pending) return false;
-
     dispatch({ type: "touchAll" });
 
     const { values, saved, touched, errors } = store.current;
@@ -146,10 +185,11 @@ export function useForm<V>(options: FormOptions<V> & CheckValues<V>): Form<V> {
     }
 
     // An edit form does not resend unchanged data; the `saved` option covers create forms.
-    if (!derived.dirty) return false;
+    // A save in flight may still leave something unsaved: `saveNow` waits and checks.
+    if (!derived.dirty && !queue.busy()) return false;
 
-    return save(store, () => optionsRef.current, values);
-  }, [store, dispatch, elements]);
+    return queue.saveNow();
+  }, [store, dispatch, elements, queue]);
 
   const handleSubmit = useCallback(
     (event?: { preventDefault: () => void }) => {
@@ -162,9 +202,13 @@ export function useForm<V>(options: FormOptions<V> & CheckValues<V>): Form<V> {
   const reset = useCallback(
     (values?: Partial<Values>) => {
       const { initial, saved } = optionsRef.current;
-      dispatch({ type: "reset", ...startValues(initial, saved, values) });
+
+      // Starting over drops what autosave has not sent: a Cancel button must not save,
+      // and data loaded from the server must not be overwritten by edits made before it.
+      queue.drop();
+      dispatch({ type: "reset", key: store.current.key, ...startValues(initial, saved, values) });
     },
-    [dispatch],
+    [store, dispatch, queue],
   );
 
   // One set of handlers per field (and per radio option) for the hook's lifetime:
@@ -189,7 +233,7 @@ export function useForm<V>(options: FormOptions<V> & CheckValues<V>): Form<V> {
                 });
           const stored = apply(config?.normalize, value);
 
-          dispatch({
+          change({
             type: "change",
             name,
             update: () => stored,
@@ -222,7 +266,7 @@ export function useForm<V>(options: FormOptions<V> & CheckValues<V>): Form<V> {
   };
 
   const fieldsOptions = untyped.fields;
-  const { values, saved, touched, errors } = state;
+  const { values, saved, touched, errors } = current;
   const derived = useMemo(
     () => deriveFields(values, saved, touched, errors, fieldsOptions),
     [values, saved, touched, errors, fieldsOptions],
@@ -266,7 +310,7 @@ export function useForm<V>(options: FormOptions<V> & CheckValues<V>): Form<V> {
 
     if (typeof value === "boolean") return { ...base, checked: value };
 
-    const text = state.text[name];
+    const text = current.text[name];
 
     return {
       ...base,
@@ -280,9 +324,9 @@ export function useForm<V>(options: FormOptions<V> & CheckValues<V>): Form<V> {
     fields: derived.fields,
     dirty: derived.dirty,
     valid: derived.valid,
-    canSubmit: derived.valid && derived.dirty && !state.pending,
-    pending: state.pending,
-    submitError: state.submitError,
+    canSubmit: derived.valid && derived.dirty && !current.pending,
+    pending: current.pending,
+    submitError: current.submitError,
     field,
     setValue,
     setError,
@@ -290,6 +334,7 @@ export function useForm<V>(options: FormOptions<V> & CheckValues<V>): Form<V> {
     errorId,
     submit,
     handleSubmit,
+    flush: queue.saveNow,
     reset,
   };
 
@@ -297,6 +342,11 @@ export function useForm<V>(options: FormOptions<V> & CheckValues<V>): Form<V> {
   // props exactly for boolean values, as FieldProps<V[K]> says.
   // oxlint-disable-next-line typescript/no-unsafe-type-assertion
   return form as unknown as Form<V>;
+}
+
+/** The reset a `resetKey` change makes: back to `initial` and the `saved` option. */
+function resetTo(options: FormOptions<Values>): FormAction {
+  return { type: "reset", key: options.resetKey, ...startValues(options.initial, options.saved) };
 }
 
 function apply(
