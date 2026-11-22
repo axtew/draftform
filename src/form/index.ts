@@ -13,6 +13,7 @@ export type {
   FieldValue,
   Form,
   FormOptions,
+  FormSchema,
   FormValues,
   InputFieldProps,
   RadioFieldProps,

@@ -17,7 +17,7 @@
     "simple-import-sort/imports": "error",
     "simple-import-sort/exports": "error"
   },
-  "ignorePatterns": ["dist"],
+  "ignorePatterns": ["dist", "example/dist"],
   "overrides": [
     {
       "files": ["**/*.test-d.ts", "**/*.test-d.tsx"],

@@ -1,5 +1,7 @@
 import type { ChangeEvent, FocusEvent } from "react";
 
+import type { StandardSchemaV1 } from "../schema";
+
 /** A value a form field can hold. Forms are flat: no arrays or nested objects. */
 export type FieldValue = string | number | boolean | null;
 
@@ -80,6 +82,13 @@ export interface FieldOptions<T, V> {
 /** Configuration of the fields, keyed by field name. */
 export type FieldsOptions<V> = { [K in keyof V]?: FieldOptions<V[K], V> };
 
+/**
+ * A Standard Schema (Zod, Valibot, ArkType and others) that fits the form: its input
+ * has some of the form's fields, each of the field's type or narrower. A schema of
+ * another shape (a field of another type, no field in common) is a type error.
+ */
+export type FormSchema<V> = StandardSchemaV1<{ [K in keyof V]?: V[K] | undefined }, unknown>;
+
 export interface FormOptions<V> {
   /**
    * Starting values. The form's type is inferred from them. Read on mount and on
@@ -88,6 +97,19 @@ export interface FormOptions<V> {
   initial: V;
   /** Parsing, formatting and validation per field. */
   fields?: FieldsOptions<V>;
+  /**
+   * A Standard Schema for the whole form: Zod, Valibot, ArkType and others, no adapter.
+   * It checks the values on every change, together with the fields' `required` and
+   * `validate`, which go first: a field shows the schema's message only when its own
+   * checks pass. An issue belongs to the field named by the first segment of its path;
+   * an issue without a path, or with a path that is not a field, goes to `formError`.
+   * Errors show like any other (after touch or submit) and block saving.
+   *
+   * The schema only checks: `onSubmit` gets the form's values, not the schema's
+   * output. Only synchronous schemas: an async check (is this email taken) belongs in
+   * `onSubmit`, reported with `setError`. A schema that answers with a promise throws.
+   */
+  schema?: FormSchema<V> | undefined;
   /**
    * Values that count as already saved, for some fields. By default the saved value
    * is the initial one, so the form starts clean. A create form whose defaults are
@@ -211,8 +233,14 @@ export interface Form<V> {
   fields: { [K in keyof V]: FieldState<V[K]> };
   /** Some field differs from its saved value. */
   dirty: boolean;
-  /** No field has an error. */
+  /** No field has an error, nor the form: see `formError`. */
   valid: boolean;
+  /**
+   * The schema's error for the form as a whole: the first issue without a path, or with
+   * a path that is not a field. Like field errors, it shows after a submit (or once
+   * every field was touched); until then it is `null`, but still makes the form invalid.
+   */
+  formError: string | null;
   /** Valid, dirty and not pending: there is something to save. */
   canSubmit: boolean;
   /** A save is in flight: from `submit()`, `flush()` or autosave. */

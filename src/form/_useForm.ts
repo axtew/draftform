@@ -10,6 +10,7 @@ import {
 } from "react";
 
 import { createSaveQueue } from "../submit";
+import { checkSchema } from "../validate";
 import { deriveFields } from "./_derive";
 import { elementRef, type Elements, focusFirst } from "./_elements";
 import { displayValue, readInput } from "./_input";
@@ -55,6 +56,7 @@ const useIsomorphicLayoutEffect = typeof document === "undefined" ? useEffect : 
  * const form = useForm({
  *   initial: { email: "", age: 18, plan: "free", remember: false },
  *   fields: { email: { required: true, normalize: (v) => v.trim() } },
+ *   schema: z.object({ email: z.email(), age: z.number().min(18) }),
  *   onSubmit: (values, { changed }) => api.patch("/me", changed),
  *   onError: (error) => toast(String(error)),
  *   autosave: true,
@@ -173,7 +175,7 @@ export function useForm<V>(options: FormOptions<V> & CheckValues<V>): Form<V> {
     dispatch({ type: "touchAll" });
 
     const { values, saved, touched, errors } = store.current;
-    const derived = deriveFields(values, saved, touched, errors, optionsRef.current.fields);
+    const derived = deriveFields(values, saved, touched, errors, optionsRef.current);
 
     if (!derived.valid) {
       focusFirst(
@@ -265,11 +267,13 @@ export function useForm<V>(options: FormOptions<V> & CheckValues<V>): Form<V> {
     return radio;
   };
 
-  const fieldsOptions = untyped.fields;
+  const { fields: fieldsOptions, schema } = untyped;
   const { values, saved, touched, errors } = current;
+  // The schema sees the whole form: checked again only when a value changes.
+  const schemaErrors = useMemo(() => checkSchema(schema, values), [schema, values]);
   const derived = useMemo(
-    () => deriveFields(values, saved, touched, errors, fieldsOptions),
-    [values, saved, touched, errors, fieldsOptions],
+    () => deriveFields(values, saved, touched, errors, { fields: fieldsOptions }, schemaErrors),
+    [values, saved, touched, errors, fieldsOptions, schemaErrors],
   );
 
   const field = (
@@ -324,6 +328,10 @@ export function useForm<V>(options: FormOptions<V> & CheckValues<V>): Form<V> {
     fields: derived.fields,
     dirty: derived.dirty,
     valid: derived.valid,
+    // Shown after a submit, like the errors of fields: `submit()` touches every field.
+    formError: Object.keys(values).every((name) => touched[name] === true)
+      ? derived.formError
+      : null,
     canSubmit: derived.valid && derived.dirty && !current.pending,
     pending: current.pending,
     submitError: current.submitError,

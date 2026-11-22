@@ -8,8 +8,10 @@ import type {
   FieldValue,
   Form,
   FormOptions,
+  FormSchema,
   InputFieldProps,
   RadioFieldProps,
+  StandardSchemaV1,
   SubmitContext,
 } from "../index";
 import * as entry from "../index";
@@ -20,7 +22,7 @@ describe("entry point", () => {
     expect(entry.useForm).toBeTypeOf("function");
   });
 
-  it("exports the types of options, state and field props", () => {
+  it("exports the types of options, state, field props and the schema", () => {
     expectTypeOf<FieldValue>().toEqualTypeOf<string | number | boolean | null>();
     expectTypeOf<FormOptions<{ a: string }>["initial"]>().toEqualTypeOf<{ a: string }>();
     expectTypeOf<FieldOptions<number, { a: number }>["parse"]>().toEqualTypeOf<
@@ -31,5 +33,9 @@ describe("entry point", () => {
     expectTypeOf<FieldProps<string | null>>().toEqualTypeOf<InputFieldProps>();
     expectTypeOf<RadioFieldProps["value"]>().toEqualTypeOf<string>();
     expectTypeOf<SubmitContext<{ a: string }>["changed"]>().toEqualTypeOf<{ a?: string }>();
+    expectTypeOf<FormOptions<{ a: string }>["schema"]>().toEqualTypeOf<
+      FormSchema<{ a: string }> | undefined
+    >();
+    expectTypeOf<FormSchema<{ a: string }>>().toExtend<StandardSchemaV1>();
   });
 });

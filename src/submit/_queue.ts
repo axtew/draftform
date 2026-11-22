@@ -101,8 +101,7 @@ export function createSaveQueue(store: Store, getOptions: () => Options): SaveQu
   /** The form's latest values, if they are valid and not saved yet. */
   const sendLatest = (): Started => {
     const { values, saved, touched, errors, epoch } = store.current;
-    const { fields } = getOptions();
-    const { valid, dirty } = deriveFields(values, saved, touched, errors, fields);
+    const { valid, dirty } = deriveFields(values, saved, touched, errors, getOptions());
 
     if (!valid || !dirty) return valid;
 
@@ -118,7 +117,7 @@ export function createSaveQueue(store: Store, getOptions: () => Options): SaveQu
     const saved =
       last !== null && last.ok && last.epoch === leftover.epoch ? last.sent : leftover.saved;
     const { values, errors, epoch, options: handlers } = leftover;
-    const { valid, dirty } = deriveFields(values, saved, {}, errors, handlers.fields);
+    const { valid, dirty } = deriveFields(values, saved, {}, errors, handlers);
 
     if (!valid || !dirty) return valid;
 

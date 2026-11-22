@@ -13,6 +13,7 @@ export {
   type FieldValue,
   type Form,
   type FormOptions,
+  type FormSchema,
   type FormValues,
   type InputFieldProps,
   type RadioFieldProps,
@@ -20,3 +21,4 @@ export {
   type SubmitContext,
   useForm,
 } from "./form";
+export type { StandardSchemaV1, StandardTypedV1 } from "./schema";
