@@ -1,0 +1,18 @@
+{
+  "name": "draftform-bench-size",
+  "private": true,
+  "type": "module",
+  "description": "Bundle size of draftform next to other React form libraries, on the same small form.",
+  "scripts": {
+    "measure": "node measure.mjs"
+  },
+  "devDependencies": {
+    "draftform": "link:../..",
+    "@tanstack/react-form": "1.33.5",
+    "esbuild": "0.28.2",
+    "formik": "2.4.9",
+    "react": "19.3.1",
+    "react-dom": "19.3.1",
+    "react-hook-form": "7.92.0"
+  }
+}

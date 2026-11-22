@@ -46,6 +46,7 @@
     "example:dev": "pnpm build && pnpm --filter draftform-example dev",
     "example:build": "pnpm build && pnpm --filter draftform-example build",
     "example:deploy": "pnpm build && pnpm --filter draftform-example run deploy",
+    "bench:size": "pnpm build && pnpm --dir bench/size install --ignore-workspace && pnpm --dir bench/size measure",
     "prepublishOnly": "pnpm lint && pnpm typecheck && pnpm test && pnpm build && pnpm check:package"
   },
   "peerDependencies": {

@@ -4,6 +4,7 @@ import { AccountScreen } from "./screens/AccountScreen";
 import { ProfileScreen } from "./screens/ProfileScreen";
 
 const REPOSITORY_URL = "https://github.com/axtew/draftform";
+const NPM_URL = "https://www.npmjs.com/package/draftform";
 
 const TABS = [
   { id: "profile", title: "Profile with autosave", Screen: ProfileScreen },
@@ -22,6 +23,7 @@ export function App() {
           <h1>draftform</h1>
           <nav className="links">
             <a href={REPOSITORY_URL}>GitHub</a>
+            <a href={NPM_URL}>npm</a>
           </nav>
         </div>
         <p className="tagline">
