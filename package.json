@@ -1,6 +1,6 @@
 {
   "name": "draftform",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "A small React hook for flat forms: knows which values are saved, submits only changes, autosaves without races.",
   "keywords": [
     "react",
